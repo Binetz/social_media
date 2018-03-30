@@ -8,6 +8,7 @@ import nltk
 from sklearn.cross_validation import train_test_split as tts
 import re
 from scipy.sparse import coo_matrix, hstack
+from scipy import sparse
 #from sklearn.neural_network import MLPClassifier
 
 
@@ -40,7 +41,7 @@ def train_test_vector(xtrain, xtest):
 def iter_fit(x_train, y_train, prob_umbral, x_iter, n_estimators=10):
   x_modelo = RandomForestClassifier(
   n_estimators      = n_estimators, # cantidad de arboles a crear
-  min_samples_split = 2,   # cantidad minima de observaciones para dividir un nodo
+  min_samples_split = 4,   # cantidad minima de observaciones para dividir un nodo
   min_samples_leaf  = 1,   # observaciones minimas que puede tener una hoja del arbol
   n_jobs            = -1    # tareas en paralelo. para todos los cores disponibles usar -1
   )
@@ -55,63 +56,48 @@ def iter_fit(x_train, y_train, prob_umbral, x_iter, n_estimators=10):
     modelo.fit(X = x_train, y = y_train2)
   return modelo
 
+def df_to_numeric(df):
+  for colname in df.columns:
+    if df[colname].dtype == 'O':
+      df[colname] = df[colname].str.replace(",", ".")
+      df[colname] = df[colname].str.replace(" ", "")
+  return df.apply(pd.to_numeric)
 
+def df_to_csr(df):
+  #convierte pandas dataframe en matriz dispersa csr
+  df = df_to_numeric(df)
+  return sparse.csr_matrix(df.values)
+
+def concat_csr_df(x_csr, x_df):
+  x_df = df_to_csr(x_df.drop(no_feature, axis=1))
+  return hstack([x_csr, x_df])
 
 
 
 # EJECUCION
 # ----------------------------------------------------------------------------
-# PATH
-data_path = '..'
 # 1. CARGAR DATOS DE DROPBOX
+data_path = 'C:/QlikData/Redes/Gobierno Corrientes/DATA/'
 xdata = pd.read_csv(data_path + 'CSV_SENTIMENT/coment_feature.csv').iloc[:, ]
 xdata['coment_orig'] = clean_corpus(xdata['coment_orig'])
 ydata = xdata['clase']
 xdata = xdata.drop('clase', axis= 1)
-no_feature = ['%Comentario', '%Publicacion', 'Fecha', 'Hora', 'coment_orig']
+no_feature = ['%Comentario', 'coment_orig']
 
-# 3. TRAIN TEST
+# 2. TRAIN TEST
 #xtrain, xtest, ytrain, ytest = tts(xdata, ydata, train_size=0.70)
 xtrain, xtest, ytrain, ytest = xdata, xdata, ydata, ydata 
 
 
+# 3. TOKENIZACION + VECTORIZACION + FEATURES
+xcorpus_train, xcorpus_test, vectorizer = train_test_vector(xtrain=xtrain['coment_orig'], xtest=xtest['coment_orig'])
+xcorpus_train = concat_csr_df(xcorpus_train, xtrain)
+xcorpus_test = concat_csr_df(xcorpus_test, xtest)
 
-# 4. TOKENIZACION + VECTORIZACION
-xcorpus_train = xtrain['coment_orig']
-xcorpus_test = xtest['coment_orig']
-xcorpus_train, xcorpus_test, vectorizer = train_test_vector(xtrain=xcorpus_train, xtest=xcorpus_test)
+# 4. MODELO
+xmodelo = iter_fit(xcorpus_train, ytrain, prob_umbral=0.15, x_iter=2, n_estimators=102)
 
-"""
-ERROR MEMORIA EN sparse to dense
-xcorpus_train = xcorpus_train.A
-xcorpus_train = xcorpus_test.A
-xtrain = xtrain.drop(no_feature, axis=1)
-xtrain = np.array(xtrain)
-xtest = xtest.drop(no_feature, axis=1)
-xcorpus_train = np.c_[xcorpus_train, xtrain]
-xcorpus_test = np.c_[xcorpus_test, xtest]
-"""
-
-# 5. MODELO
-"""
-modelo = svm.SVC(kernel='linear') 
-modelo.fit(X=xtrain, y=ytrain)
-"""
-
-
-"""
-xmodelo = RandomForestClassifier(
- n_estimators      = 66, # cantidad de arboles a crear
- min_samples_split = 2,   # cantidad minima de observaciones para dividir un nodo
- min_samples_leaf  = 1,   # observaciones minimas que puede tener una hoja del arbol
- n_jobs            = -1    # tareas en paralelo. para todos los cores disponibles usar -1
- )
-xmodelo.fit(X = xcorpus_train, y = ytrain)
-"""
-
-xmodelo = iter_fit(xcorpus_train, ytrain, prob_umbral=0.50, x_iter=2, n_estimators=333)
-
-# 6. PREDICT + METRICAS
+# 5. PREDICT + METRICAS
 prediccion = xmodelo.predict(xcorpus_test)
 pred_proba = xmodelo.predict_proba(xcorpus_test)
 pred_proba = pd.DataFrame(pred_proba, columns=['pos', 'neg'])
